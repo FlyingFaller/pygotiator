@@ -98,25 +98,37 @@ def run_tournament(bots: list[dict[str, Any]], num_rounds: int = 100, timeout_se
             # prevent errors from taking down tourney
             move_a, move_b = None, None
             
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                future_a = executor.submit(bot_a_instance.make_move, hist_a)
-                future_b = executor.submit(bot_b_instance.make_move, hist_b)
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
                 
-                try:
-                    move_a = future_a.result(timeout=timeout_seconds)
-                    if not isinstance(move_a, Move): 
-                        move_a = None
-                except (concurrent.futures.TimeoutError, Exception):
-                    move_a = None 
-                    print(f'Error in bot `{bot_a_name}`: {future_a.exception()}')
-                
-                try:
-                    move_b = future_b.result(timeout=timeout_seconds)
-                    if not isinstance(move_b, Move): 
-                        move_b = None
-                except (concurrent.futures.TimeoutError, Exception):
+            future_a = executor.submit(bot_a_instance.make_move, hist_a)
+            future_b = executor.submit(bot_b_instance.make_move, hist_b)
+            
+            # Bot A
+            try:
+                move_a = future_a.result(timeout=timeout_seconds)
+                if not isinstance(move_a, Move): 
+                    move_a = None
+            except concurrent.futures.TimeoutError:
+                move_a = None 
+                print(f'Bot `{bot_a_name}` timed out.')
+            except Exception as e:
+                move_a = None
+                print(f'Error in bot `{bot_a_name}`: {e}')
+
+            # Bot B
+            try:
+                move_b = future_b.result(timeout=timeout_seconds)
+                if not isinstance(move_b, Move): 
                     move_b = None
-                    print(f'Error in bot `{bot_b_name}`: {future_b.exception()}')
+            except concurrent.futures.TimeoutError:
+                move_b = None
+                print(f'Bot `{bot_b_name}` timed out.')
+            except Exception as e:
+                move_b = None
+                print(f'Error in bot `{bot_b_name}`: {e}')
+
+            # Command shutdown so haning threads don't take out the entire tourney
+            executor.shutdown(wait=False, cancel_futures=True)
 
             # Evaluate the results of the match
             result_a, result_b = Result.TIE, Result.TIE 
@@ -144,6 +156,21 @@ def run_tournament(bots: list[dict[str, Any]], num_rounds: int = 100, timeout_se
                 "result_a": result_a,
                 "result_b": result_b
             })
+
+            # Print match results
+            a_str = move_a.name if move_a else "FORFEIT"
+            b_str = move_b.name if move_b else "FORFEIT"
+            
+            # Determine the winner string
+            if result_a == Result.WIN:
+                outcome = f"`{bot_a_name}` WINS"
+            elif result_b == Result.WIN:
+                outcome = f"`{bot_b_name}` WINS"
+            else:
+                outcome = "TIE"
+                
+            # Concise output
+            print(f"`{bot_a_name}` ({a_str}) vs `{bot_b_name}` ({b_str}) -> {outcome}")
             
     return central_history
 
@@ -191,10 +218,10 @@ def calculate_scores(central_history: list[dict[str, Any]]) -> dict[str, dict[st
 
 if __name__ == "__main__":
 
-    example_bots = ['all_rock_bot.py', 'ascii_bot.py', 'example_bot.py', 'tit4tat_bot.py']
+    example_bots = ['all_rock_bot.py', 'ascii_bot.py', 'example_bot.py', 'tit4tat_bot.py', 'broken_bot.py']
 
-    loaded_bots = load_bots(exclude=None) # Change to exclude=example_bots for real tournament!
-    history = run_tournament(loaded_bots, num_rounds=100, timeout_seconds=20.0) # 100 rounds, max thinking time 20 seconds
+    loaded_bots = load_bots(exclude='broken_bot.py') # Change to exclude=example_bots for real tournament!
+    history = run_tournament(loaded_bots, num_rounds=100, timeout_seconds=1.0) # 100 rounds, max thinking time 20 seconds
     final_scores = calculate_scores(history)
     
     print("\n--- TOURNAMENT RESULTS ---")
