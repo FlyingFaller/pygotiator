@@ -8,11 +8,16 @@ class Move(Enum):
     PAPER    = "PAPER"
     SCISSORS = "SCISSORS"
 
+class Result(Enum):
+    WIN  = "WIN"
+    LOSS = "LOSS"
+    TIE  = "TIE"
+
 @dataclass
 class RoundResult:
-    my_move      : Move
-    opponent_move: Move
-    result       : str # String name of your class
+    my_move      : Move | None
+    opponent_move: Move | None
+    result       : Result
 
 
 class RPSTemplate(ABC):
