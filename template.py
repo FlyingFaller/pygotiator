@@ -15,7 +15,7 @@ class RoundResult:
     result       : str # String name of your class
 
 
-class RSPTemplate(ABC):
+class RPSTemplate(ABC):
     """
     Inherit this template and implement the make_move function
     """
