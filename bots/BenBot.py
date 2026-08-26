@@ -13,47 +13,62 @@ import tifffile
 import requests
 from io import BytesIO
 import json
+import wikipediaapi
+from transformers import pipeline
+from collections import Counter
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO) # Set higher during runtime to keep console clean
 
 class BenBot(RPSTemplate):
     class FeatureSet(Enum):
-        RANDOM         = "random_select"
-        LAVALAMP       = "lava_lamp"
-        TAROT          = "tarot_reading"
-        CLOUDS         = "cloud_analysis"
-        WEIGHTEDRANDOM = "weighted_random"
-        WIKI           = "wikipedia_select"
+        RANDOM   = "random_select"
+        LAVALAMP = "lava_lamp"
+        TAROT    = "tarot_reading"
+        CLOUDS   = "cloud_analysis"
+        STANLEY  = "stanley_select"
+        WIKI     = "wikipedia_select"
 
+    # (is_active, weight)
     ACTIVE_FEATURES = {
-        FeatureSet.RANDOM        : True,
-        FeatureSet.LAVALAMP      : False,
-        FeatureSet.TAROT         : True,
-        FeatureSet.CLOUDS        : True,
-        FeatureSet.WEIGHTEDRANDOM: False,
-        FeatureSet.WIKI          : False
+        FeatureSet.RANDOM  : (True,  1.0),
+        FeatureSet.LAVALAMP: (False, 1.0),
+        FeatureSet.TAROT   : (True,  1.0),
+        FeatureSet.CLOUDS  : (True,  1.0),
+        FeatureSet.STANLEY : (True,  1.0),
+        FeatureSet.WIKI    : (True,  1.0)
     }
 
     DEBUG = False
 
+    NROUNDS = 100
+
     def __init__(self):
-        pass
+        if self.ACTIVE_FEATURES[self.FeatureSet.WIKI]:
+            logger.info('Loading classifier model...')
+            self.classifier = pipeline(
+                "zero-shot-classification", 
+                model="typeform/distilbert-base-uncased-mnli" # Some model or some shit idk bro
+            )
+        
 
     def make_move(self, history: list[RoundResult]) -> Move:
         start_time = time.time()
 
         # Filter active features
-        active_features = [
-            feature for feature, active in self.ACTIVE_FEATURES.items() if active
-        ]
+        active_features = []
+        weights = []
+        for feature, (is_active, weight) in self.ACTIVE_FEATURES.items():
+            if is_active:
+                active_features.append(feature)
+                weights.append(weight)
 
         if not active_features: 
-            logger.warning("No features active,  defaulting to `random_select`.")
+            logger.warning("No features active, defaulting to `random_select`.")
             return self.random_select()
 
         # Randomly select a feature for this round
-        selected_feature = random.choice(active_features)
+        selected_feature = random.choices(active_features, weights=weights, k=1)[0]
         method_func = getattr(self, selected_feature.value, "random_select") # Default to random
 
         logger.info(f"Selected {selected_feature.name}!")
@@ -70,14 +85,14 @@ class BenBot(RPSTemplate):
             elif runtime > 15: logger.warning(f"Runtime close to exceeding limits: {runtime:.3f} sec.")
             else: logger.info(f"Runtime: {runtime:.3f} sec.")
 
-    def random_select(self, history: list[RoundResult]):
+    def random_select(self, history: list[RoundResult]) -> Move:
         """Basic random selection"""
         return random.choice([Move.ROCK, Move.PAPER, Move.SCISSORS])
 
-    def lava_lamp(self, history: list[RoundResult]):
+    def lava_lamp(self, history: list[RoundResult]) -> Move:
         pass
 
-    def tarot_reading(self, history: list[RoundResult]):
+    def tarot_reading(self, history: list[RoundResult]) -> Move|None:
         tarot_map = {
               # --- Major Arcana (22) ---
             "The Fool"          : Move.PAPER,    "The Magician"  : Move.SCISSORS,
@@ -138,8 +153,7 @@ class BenBot(RPSTemplate):
         print(f'{selected_card.upper():^60}\n')
         return tarot_map[selected_card]
 
-
-    def cloud_analysis(self, history: list[RoundResult]):
+    def cloud_analysis(self, history: list[RoundResult]) -> Move:
         api_url = "https://earth-search.aws.element84.com/v1"
         client = Client.open(api_url)
 
@@ -149,7 +163,7 @@ class BenBot(RPSTemplate):
         search = client.search(
             collections=["sentinel-2-l2a"],
             datetime=[start_time, end_time],
-            max_items=100, # Adjust until under runtime limits
+            max_items=min(100, self.NROUNDS), # Adjust until under runtime limits
             query={
                 "s2:nodata_pixel_percentage": {"lt": 20}, # Ensures a full-ish frame
                 "eo:cloud_cover": {"gt": 10, "lt": 90}    # Ensures between 10% and 90% cloud cover
@@ -202,12 +216,62 @@ class BenBot(RPSTemplate):
 
         return [Move.ROCK, Move.PAPER, Move.SCISSORS][cloud_idx]
 
-    def weighted_random(self, history: list[RoundResult]):
-        pass
+    def stanley_select(self, history: list[RoundResult]) -> Move:
+        if len(history) < self.NROUNDS/5:
+            return self.random_select(history)
 
-    def wikipedia_select(self, history: list[RoundResult]):
-        pass
+        opponent_moves = [result.opponent_move for result in history]
+        counts = Counter(opponent_moves)
+        
+        weights = [
+            counts.get(Move.SCISSORS, 0), 
+            counts.get(Move.ROCK, 0), 
+            counts.get(Move.PAPER, 0)
+        ]
 
+        return random.choices([Move.ROCK, Move.PAPER, Move.SCISSORS], weights=weights)[0]
+
+    def wikipedia_select(self, history: list[RoundResult]) -> Move:
+        wiki = wikipediaapi.Wikipedia(
+            user_agent='PyGotiator (bengsaunders@gmail.com)', 
+            language='en',
+            extract_format=wikipediaapi.ExtractFormat.WIKI # Return raw text not HTML
+            )
+        pages = wiki.random(limit=1)
+        if pages: 
+            page = list(pages.values())[0]
+        else:
+            raise ValueError('Failed to fetch a page.')
+
+        logger.info(f"Found article: `{page.title}`.")
+
+        func = random.choice([
+            self._text_len_2_move, 
+            self._text_hash_2_move, 
+            self._text_semantic_2_move
+            ])
+
+        return func(page.text)     
+
+    def _text_len_2_move(self, text: str) -> Move:
+        logger.info('Using text length.')
+        text_len = len(text.split())
+        move = [Move.ROCK, Move.PAPER, Move.SCISSORS][text_len%3]
+        logger.info(f'The article contains {text_len} word(s). Choosing {move.name}!')
+        return move
+
+    def _text_hash_2_move(self, text: str) -> Move:
+        logger.info('Using text hash.')
+        hash_hex = hashlib.sha256(text.encode('utf-8')).hexdigest()
+        hash_int = int(hash_hex, 16)
+        return [Move.ROCK, Move.PAPER, Move.SCISSORS][hash_int%3]
+
+    def _text_semantic_2_move(self, text: str) -> Move:
+        labels = {'rock': Move.ROCK, 'paper': Move.PAPER, 'scissors': Move.SCISSORS}
+        logger.info('Using semantic analysis.')
+        result = self.classifier(text, list(labels.keys()))
+        logger.info(f'The article was most sematically similar to the concept of `{result['labels'][0].upper()}` with a score of {result['scores'][0]:.2%}')
+        return labels[result['labels'][0]]
 
 if __name__ == "__main__":
     bot = BenBot()
