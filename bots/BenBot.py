@@ -15,7 +15,8 @@ from io import BytesIO
 import json
 import wikipediaapi
 from transformers import pipeline
-from collections import Counter
+from collections import Counter, deque
+import cv2
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO) # Set higher during runtime to keep console clean
@@ -32,7 +33,7 @@ class BenBot(RPSTemplate):
     # (is_active, weight)
     ACTIVE_FEATURES = {
         FeatureSet.RANDOM  : (True,  1.0),
-        FeatureSet.LAVALAMP: (False, 1.0),
+        FeatureSet.LAVALAMP: (True,   1.0),
         FeatureSet.TAROT   : (True,  1.0),
         FeatureSet.CLOUDS  : (True,  1.0),
         FeatureSet.STANLEY : (True,  1.0),
@@ -41,18 +42,34 @@ class BenBot(RPSTemplate):
 
     DEBUG = False
 
-    NROUNDS = 100
+    NROUNDS = 20
+
+    CAMERA_INDEX = 0
+    CAMERA_WIDTH = 540
+    CAMERA_HEIGHT = 960
+
+    LAVALAMP_THINK_TIME = 1 # seconds
+
+    cap = None # Global camera capture
 
     def __init__(self):
-        if self.ACTIVE_FEATURES[self.FeatureSet.WIKI]:
+        if self.ACTIVE_FEATURES[self.FeatureSet.WIKI][0]:
             logger.info('Loading classifier model...')
             self.classifier = pipeline(
                 "zero-shot-classification", 
                 model="typeform/distilbert-base-uncased-mnli" # Some model or some shit idk bro
             )
-        
+
+        if self.ACTIVE_FEATURES[self.FeatureSet.LAVALAMP][0]:
+            if BenBot.cap is None or not BenBot.cap.isOpened():
+                BenBot.cap = cv2.VideoCapture(self.CAMERA_INDEX, cv2.CAP_DSHOW)
+                BenBot.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.CAMERA_WIDTH)
+                BenBot.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.CAMERA_HEIGHT)
+
+            self.frame_buffer = deque(maxlen=90)
 
     def make_move(self, history: list[RoundResult]) -> Move:
+        """Orchestrator to call on the different move methods."""
         start_time = time.time()
 
         # Filter active features
@@ -90,9 +107,54 @@ class BenBot(RPSTemplate):
         return random.choice([Move.ROCK, Move.PAPER, Move.SCISSORS])
 
     def lava_lamp(self, history: list[RoundResult]) -> Move:
-        pass
+        """
+        Uses lava lamp noise to generate random moves. 
+
+        Setup steps:    
+        1. Visit VDO.Ninja on the iPhone, select Add OBS Camera, configure and start
+        2. Open OBS Studio and add browser source, configure resolution, framerate, and source URL to those provided by VDO.Ninja
+        3. Start Vitual Camera in OBS Studio
+        4. Check CV2 settings at top of this script
+        """
+        self.frame_buffer.clear()
+        start_time = time.time()
+
+        while True:
+            ret, frame = BenBot.cap.read()
+
+            if not ret:
+                raise Exception('Recieved no images!')
+
+            
+            blurred_frame = cv2.GaussianBlur(frame, (21, 21), 0)
+            self.frame_buffer.append(blurred_frame)
+
+            if len(self.frame_buffer) == self.frame_buffer.maxlen:
+                oldest_frame = self.frame_buffer[0]
+                newest_frame = blurred_frame
+
+                delta = cv2.absdiff(oldest_frame, newest_frame)
+                gray_delta = cv2.cvtColor(delta, cv2.COLOR_BGR2GRAY)
+                _, thresh_delta = cv2.threshold(gray_delta, 25, 255, cv2.THRESH_BINARY)
+
+                if self.DEBUG:
+                    cv2.imshow('Motion Map', thresh_delta)  
+
+                if time.time() - start_time > self.LAVALAMP_THINK_TIME:
+                    frame_bytes = thresh_delta.tobytes()
+                    hash_hex = hashlib.sha256(frame_bytes).hexdigest()
+                    hash_int = int(hash_hex, 16)
+                    return [Move.ROCK, Move.PAPER, Move.SCISSORS][hash_int % 3]
+
+            if self.DEBUG:
+                cv2.imshow('Live View', frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+
+            
 
     def tarot_reading(self, history: list[RoundResult]) -> Move|None:
+        """Pull a random tarot card in the terminal and choose a move based on vibes."""
         tarot_map = {
               # --- Major Arcana (22) ---
             "The Fool"          : Move.PAPER,    "The Magician"  : Move.SCISSORS,
@@ -154,6 +216,7 @@ class BenBot(RPSTemplate):
         return tarot_map[selected_card]
 
     def cloud_analysis(self, history: list[RoundResult]) -> Move:
+        """Uses recent Sentinel 2 l2a Scene Classification Layer data to choose a move."""
         api_url = "https://earth-search.aws.element84.com/v1"
         client = Client.open(api_url)
 
@@ -217,6 +280,7 @@ class BenBot(RPSTemplate):
         return [Move.ROCK, Move.PAPER, Move.SCISSORS][cloud_idx]
 
     def stanley_select(self, history: list[RoundResult]) -> Move:
+        """A weighted random move selection from our old pal Stanley."""
         if len(history) < self.NROUNDS/5:
             return self.random_select(history)
 
@@ -232,6 +296,7 @@ class BenBot(RPSTemplate):
         return random.choices([Move.ROCK, Move.PAPER, Move.SCISSORS], weights=weights)[0]
 
     def wikipedia_select(self, history: list[RoundResult]) -> Move:
+        """Move selection based on random english Wikipedia article text."""
         wiki = wikipediaapi.Wikipedia(
             user_agent='PyGotiator (bengsaunders@gmail.com)', 
             language='en',
@@ -254,6 +319,7 @@ class BenBot(RPSTemplate):
         return func(page.text)     
 
     def _text_len_2_move(self, text: str) -> Move:
+        """Move from text length."""
         logger.info('Using text length.')
         text_len = len(text.split())
         move = [Move.ROCK, Move.PAPER, Move.SCISSORS][text_len%3]
@@ -261,12 +327,14 @@ class BenBot(RPSTemplate):
         return move
 
     def _text_hash_2_move(self, text: str) -> Move:
+        """Move from text hash."""
         logger.info('Using text hash.')
         hash_hex = hashlib.sha256(text.encode('utf-8')).hexdigest()
         hash_int = int(hash_hex, 16)
         return [Move.ROCK, Move.PAPER, Move.SCISSORS][hash_int%3]
 
     def _text_semantic_2_move(self, text: str) -> Move:
+        """Move from semantic similarity of text."""
         labels = {'rock': Move.ROCK, 'paper': Move.PAPER, 'scissors': Move.SCISSORS}
         logger.info('Using semantic analysis.')
         result = self.classifier(text, list(labels.keys()))
@@ -275,5 +343,6 @@ class BenBot(RPSTemplate):
 
 if __name__ == "__main__":
     bot = BenBot()
-    output = bot.make_move(history=[])
-    print(f'Output: {output}')
+    for _ in range(5):
+        output = bot.make_move(history=[])
+        print(f'Output: {output}')
