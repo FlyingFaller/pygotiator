@@ -19,7 +19,7 @@ from collections import Counter, deque
 import cv2
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO) # Set higher during runtime to keep console clean
+logging.basicConfig(level=logging.FATAL) # Set higher during runtime to keep console clean
 
 class BenBot(RPSTemplate):
     class FeatureSet(Enum):
@@ -33,7 +33,7 @@ class BenBot(RPSTemplate):
     # (is_active, weight)
     ACTIVE_FEATURES = {
         FeatureSet.RANDOM  : (True,  1.0),
-        FeatureSet.LAVALAMP: (True,   1.0),
+        FeatureSet.LAVALAMP: (False, 1.0),
         FeatureSet.TAROT   : (True,  1.0),
         FeatureSet.CLOUDS  : (True,  1.0),
         FeatureSet.STANLEY : (True,  1.0),
@@ -41,6 +41,7 @@ class BenBot(RPSTemplate):
     }
 
     DEBUG = False
+    VERBOSE = True
 
     NROUNDS = 20
 
@@ -62,6 +63,7 @@ class BenBot(RPSTemplate):
 
         if self.ACTIVE_FEATURES[self.FeatureSet.LAVALAMP][0]:
             if BenBot.cap is None or not BenBot.cap.isOpened():
+                logger.info('Establishing camera connection...')
                 BenBot.cap = cv2.VideoCapture(self.CAMERA_INDEX, cv2.CAP_DSHOW)
                 BenBot.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.CAMERA_WIDTH)
                 BenBot.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.CAMERA_HEIGHT)
@@ -89,6 +91,7 @@ class BenBot(RPSTemplate):
         method_func = getattr(self, selected_feature.value, "random_select") # Default to random
 
         logger.info(f"Selected {selected_feature.name}!")
+        if self.VERBOSE: print(f"\nBen Bot used {selected_feature.name}!\n")
 
         # Run and return selected method
         try:
@@ -141,6 +144,8 @@ class BenBot(RPSTemplate):
                     cv2.imshow('Motion Map', thresh_delta)  
 
                 if time.time() - start_time > self.LAVALAMP_THINK_TIME:
+                    logger.info(f'LAVALAMP THINK TIME exceeded and buffer filled, calculating move.')
+                    if self.VERBOSE: print(f'The lava lamp has though long and hard and will now make its decision.\n')
                     frame_bytes = thresh_delta.tobytes()
                     hash_hex = hashlib.sha256(frame_bytes).hexdigest()
                     hash_int = int(hash_hex, 16)
@@ -206,13 +211,17 @@ class BenBot(RPSTemplate):
             "Queen of Pentacles": Move.PAPER, "King of Pentacles"  : Move.PAPER
         }
 
+        if self.VERBOSE: print('Deciding your fate...')
+        logger.info(f'Reading tarot card ANSI art.')
+        
         with open("bots/tarot_ansi_deck.json", "r", encoding="utf-8") as f:
             deck_art = json.load(f)
 
         selected_card = random.choice(list(tarot_map.keys()))
 
-        print(deck_art[selected_card])
-        print(f'{selected_card.upper():^60}\n')
+        if self.VERBOSE: print(deck_art[selected_card])
+        if self.VERBOSE: print(f'{selected_card.upper():^60}\n')
+
         return tarot_map[selected_card]
 
     def cloud_analysis(self, history: list[RoundResult]) -> Move:
@@ -222,6 +231,9 @@ class BenBot(RPSTemplate):
 
         end_time = datetime.now(timezone.utc)
         start_time = end_time - timedelta(hours=8)
+
+        logger.info(f'Searching the Sentinel 2 l2a dataset for clouds.')
+        if self.VERBOSE: print(f'Searching the Sentinel 2 l2a dataset for clouds.')
 
         search = client.search(
             collections=["sentinel-2-l2a"],
@@ -236,24 +248,30 @@ class BenBot(RPSTemplate):
         if not search.matched():
             raise ValueError("No satellite images found for datetime range.")
 
+        logger.info(f'Selecting a random cloud.')
+        if self.VERBOSE: print(f'Selecting the fluffiest candidates.')
         items = list(search.items())
         selection = random.choice(items).assets # Dict of assets
 
+        logger.info(f'Extracting the SCL')            
+        if self.VERBOSE: print(f'Extracting the cloud data.')
         scl_url = selection['scl'].href # Scene Classification Layer
         thumbnail_url = selection['thumbnail'].href
 
         # Stream the remote COG via HTTP range requests using fsspec, f rasterio!
-        scl_url = selection['scl'].href
         with fsspec.open(scl_url, mode='rb') as f:
             with tifffile.TiffFile(f) as tif:
                 level_idx = min(3, len(tif.series[0].levels) - 1) # There are levels to this shit (0 for highest res)
                 scl_data = tif.series[0].levels[level_idx].asarray()
 
+        logger.info(f'Getting cloud mask and computing noise.')            
+        if self.VERBOSE: print(f'Isolating and extracting the noise.\n')
         cloud_mask = np.isin(scl_data, [8, 9, 10]) # Clouds are classified as 8-10
         cloud_bytes = cloud_mask.tobytes()
         cloud_idx = int(hashlib.sha256(cloud_bytes).hexdigest(), 16) % 3
 
         if self.DEBUG:
+            logger.info(f'Showing cloud images.')  
             response = requests.get(thumbnail_url)
             response.raise_for_status()
             thumbnail_img = plt.imread(BytesIO(response.content), format='jpg')
@@ -293,6 +311,10 @@ class BenBot(RPSTemplate):
             counts.get(Move.PAPER, 0)
         ]
 
+        weight_sum = sum(weights)
+        logger.info(f'Current weights are : {weights}.')
+        if self.VERBOSE: print(f'Current weights are {weights[1]/weight_sum:.3%} rock, {weights[2]/weight_sum:.3%} paper, and {weights[0]/weight_sum:.3%} scissors.\n')
+
         return random.choices([Move.ROCK, Move.PAPER, Move.SCISSORS], weights=weights)[0]
 
     def wikipedia_select(self, history: list[RoundResult]) -> Move:
@@ -309,6 +331,7 @@ class BenBot(RPSTemplate):
             raise ValueError('Failed to fetch a page.')
 
         logger.info(f"Found article: `{page.title}`.")
+        if self.VERBOSE: print(f"Found article: `{page.title}`.")
 
         func = random.choice([
             self._text_len_2_move, 
@@ -324,11 +347,13 @@ class BenBot(RPSTemplate):
         text_len = len(text.split())
         move = [Move.ROCK, Move.PAPER, Move.SCISSORS][text_len%3]
         logger.info(f'The article contains {text_len} word(s). Choosing {move.name}!')
+        if self.VERBOSE: print(f'The article contains {text_len} word(s), therefore I throw: {move.name}!\n')
         return move
 
     def _text_hash_2_move(self, text: str) -> Move:
         """Move from text hash."""
         logger.info('Using text hash.')
+        if self.VERBOSE: print('Hashing the article!\n')
         hash_hex = hashlib.sha256(text.encode('utf-8')).hexdigest()
         hash_int = int(hash_hex, 16)
         return [Move.ROCK, Move.PAPER, Move.SCISSORS][hash_int%3]
@@ -339,6 +364,7 @@ class BenBot(RPSTemplate):
         logger.info('Using semantic analysis.')
         result = self.classifier(text, list(labels.keys()))
         logger.info(f'The article was most sematically similar to the concept of `{result['labels'][0].upper()}` with a score of {result['scores'][0]:.2%}')
+        if self.VERBOSE: print(f'The article was most sematically similar to the concept of `{result['labels'][0].upper()}` with a score of {result['scores'][0]:.2%}\n')
         return labels[result['labels'][0]]
 
 if __name__ == "__main__":

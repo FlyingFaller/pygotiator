@@ -4,8 +4,73 @@ import inspect
 import concurrent.futures
 from typing import Any
 import itertools
+from colorama import init, Fore, Style
+import sys
+import threading
 
 from template import RPSTemplate, Move, RoundResult, Result
+
+# Helper for indentation management
+class ThreadSafeIndentingStdout:
+    """Intercepts print statements and applies indentation."""
+    def __init__(self):
+        self.original_stdout = sys.stdout
+        self.thread_locals = threading.local()
+        self.lock = threading.Lock()
+
+    def write(self, data):
+        # Check if the current thread has an active prefix (indent)
+        prefix = getattr(self.thread_locals, 'prefix', None)
+        
+        if prefix:
+            with self.lock: # Prevent threads from printing over each other
+                is_new_line = getattr(self.thread_locals, 'is_new_line', True)
+                out = ""
+                for char in data:
+                    # Inject prefix at the start of a line
+                    if is_new_line and char != '\n':
+                        out += prefix
+                        is_new_line = False
+                    out += char
+                    # Reset flag when we hit a newline
+                    if char == '\n':
+                        is_new_line = True
+                        
+                self.thread_locals.is_new_line = is_new_line
+                self.original_stdout.write(out)
+        else:
+            # If no prefix is set (e.g., the main game engine), print normally
+            self.original_stdout.write(data)
+
+    def flush(self):
+        self.original_stdout.flush()
+
+# Init stuff
+init()
+
+sys.stdout = ThreadSafeIndentingStdout()
+
+AVAILABLE_COLORS = [
+    Fore.GREEN, Fore.BLUE, Fore.CYAN, Fore.MAGENTA, Fore.YELLOW,
+    Fore.LIGHTGREEN_EX, Fore.LIGHTBLUE_EX, Fore.LIGHTCYAN_EX,
+    Fore.LIGHTMAGENTA_EX, Fore.LIGHTYELLOW_EX
+]
+_bot_colors_map = {}
+
+# Main functions
+def format_bot_name(bot_name: str, use_backticks: bool = True, pad_to: int = 0) -> str:
+    """Assigns a persistent color to a bot name and returns the formatted ANSI string."""
+    if bot_name not in _bot_colors_map:
+        color = AVAILABLE_COLORS[len(_bot_colors_map) % len(AVAILABLE_COLORS)] # Cycle through each color
+        _bot_colors_map[bot_name] = color
+        
+    text = f"`{bot_name}`" if use_backticks else bot_name
+
+    # Pad here to avoid formatting issues with ANSI chars
+    if pad_to > 0:
+        text = f"{text:<{pad_to}}"
+        
+    return f"{_bot_colors_map[bot_name]}{text}{Style.RESET_ALL}" 
 
 def load_bots(folder_path="bots", exclude=None) -> list[dict[str, Any]]:
     """
@@ -77,17 +142,23 @@ def run_tournament(bots: list[dict[str, Any]], num_rounds: int = 100, timeout_se
     Runs a Round-Robin tournament between all loaded bots.
     """
     central_history = []
+    err_style = f"{Fore.RED}{Style.BRIGHT}"
     
     for bot_a_info, bot_b_info in itertools.combinations(bots, 2):
         
         bot_a_name = bot_a_info["class_name"]
         bot_b_name = bot_b_info["class_name"]
+
+        # Bot styles
+        c_bot_a = format_bot_name(bot_a_name)
+        c_bot_b = format_bot_name(bot_b_name)
         
         try:
             bot_a_instance = bot_a_info["class_object"]()
             bot_b_instance = bot_b_info["class_object"]()
         except Exception as e:
-            print(f"Failed to initialize match between {bot_a_name} and {bot_b_name}: {e}")
+            # print(f"Failed to initialize match between {bot_a_name} and {bot_b_name}: {e}")
+            print(f"{err_style}Failed to initialize match between {c_bot_a}{err_style} and {c_bot_b}{err_style}: {e}{Style.RESET_ALL}")
             continue
 
         for _ in range(num_rounds):
@@ -97,11 +168,23 @@ def run_tournament(bots: list[dict[str, Any]], num_rounds: int = 100, timeout_se
             # Make moves on different threads to enforce timeouts and 
             # prevent errors from taking down tourney
             move_a, move_b = None, None
+
+            # Wrapper func to inject indents
+            def run_bot(bot_func, history):
+                sys.stdout.thread_locals.prefix = f"    " # Just an indent for now
+                try:
+                    return bot_func(history)
+                finally:
+                    # Clean up so the thread can be reused safely
+                    sys.stdout.thread_locals.prefix = None
             
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
                 
-            future_a = executor.submit(bot_a_instance.make_move, hist_a)
-            future_b = executor.submit(bot_b_instance.make_move, hist_b)
+            # future_a = executor.submit(bot_a_instance.make_move, hist_a)
+            # future_b = executor.submit(bot_b_instance.make_move, hist_b)
+
+            future_a = executor.submit(run_bot, bot_a_instance.make_move, hist_a)
+            future_b = executor.submit(run_bot, bot_b_instance.make_move, hist_b)
             
             # Bot A
             try:
@@ -110,10 +193,12 @@ def run_tournament(bots: list[dict[str, Any]], num_rounds: int = 100, timeout_se
                     move_a = None
             except concurrent.futures.TimeoutError:
                 move_a = None 
-                print(f'Bot `{bot_a_name}` timed out.')
+                # print(f'Bot `{bot_a_name}` timed out.')
+                print(f"{err_style}Bot {c_bot_a}{err_style} timed out.{Style.RESET_ALL}")
             except Exception as e:
                 move_a = None
-                print(f'Error in bot `{bot_a_name}`: {e}')
+                # print(f'Error in bot `{bot_a_name}`: {e}')
+                print(f"{err_style}Error in bot {c_bot_a}{err_style}: {e}{Style.RESET_ALL}")
 
             # Bot B
             try:
@@ -122,10 +207,12 @@ def run_tournament(bots: list[dict[str, Any]], num_rounds: int = 100, timeout_se
                     move_b = None
             except concurrent.futures.TimeoutError:
                 move_b = None
-                print(f'Bot `{bot_b_name}` timed out.')
+                # print(f'Bot `{bot_b_name}` timed out.')
+                print(f"{err_style}Bot {c_bot_b}{err_style} timed out.{Style.RESET_ALL}")
             except Exception as e:
                 move_b = None
-                print(f'Error in bot `{bot_b_name}`: {e}')
+                # print(f'Error in bot `{bot_b_name}`: {e}')
+                print(f"{err_style}Error in bot {c_bot_b}{err_style}: {e}{Style.RESET_ALL}")
 
             # Command shutdown so haning threads don't take out the entire tourney
             executor.shutdown(wait=False, cancel_futures=True)
@@ -158,19 +245,25 @@ def run_tournament(bots: list[dict[str, Any]], num_rounds: int = 100, timeout_se
             })
 
             # Print match results
-            a_str = move_a.name if move_a else "FORFEIT"
-            b_str = move_b.name if move_b else "FORFEIT"
-            
+            # a_str = move_a.name if move_a else "FORFEIT"
+            # b_str = move_b.name if move_b else "FORFEIT"
+
+            a_str = move_a.name if move_a else f"{err_style}FORFEIT{Style.RESET_ALL}"
+            b_str = move_b.name if move_b else f"{err_style}FORFEIT{Style.RESET_ALL}"
+
             # Determine the winner string
             if result_a == Result.WIN:
-                outcome = f"`{bot_a_name}` WINS"
+                # outcome = f"`{bot_a_name}` WINS"
+                outcome = f"{c_bot_a} WINS"
             elif result_b == Result.WIN:
-                outcome = f"`{bot_b_name}` WINS"
+                # outcome = f"`{bot_b_name}` WINS"
+                outcome = f"{c_bot_b} WINS"
             else:
                 outcome = "TIE"
                 
             # Concise output
-            print(f"`{bot_a_name}` ({a_str}) vs `{bot_b_name}` ({b_str}) -> {outcome}")
+            # print(f"`{bot_a_name}` ({a_str}) vs `{bot_b_name}` ({b_str}) -> {outcome}")
+            print(f"{c_bot_a} ({a_str}) vs {c_bot_b} ({b_str}) -> {outcome}")
             
     return central_history
 
@@ -220,10 +313,12 @@ if __name__ == "__main__":
 
     example_bots = ['all_rock_bot.py', 'ascii_bot.py', 'example_bot.py', 'tit4tat_bot.py', 'broken_bot.py']
 
-    loaded_bots = load_bots(exclude=['broken_bot.py', 'all_rock_bot.py']) # Change to exclude=example_bots for real tournament!
-    history = run_tournament(loaded_bots, num_rounds=20, timeout_seconds=20.0) # 100 rounds, max thinking time 20 seconds
+    loaded_bots = load_bots(exclude=['broken_bot.py', 'all_rock_bot.py', 'example_bot.py', 'tit4tat_bot.py']) # Change to exclude=example_bots for real tournament!
+    history = run_tournament(loaded_bots, num_rounds=20, timeout_seconds=20.0)
     final_scores = calculate_scores(history)
     
     print("\n--- TOURNAMENT RESULTS ---")
     for rank, (bot_name, stats) in enumerate(final_scores.items(), start=1):
-        print(f"{rank}. {bot_name:<15}: {stats['points']} pts ({stats['wins']}W - {stats['losses']}L - {stats['ties']}T)")
+        # print(f"{rank}. {bot_name:<15}: {stats['points']} pts ({stats['wins']}W - {stats['losses']}L - {stats['ties']}T)")
+        c_bot_name = format_bot_name(bot_name, use_backticks=False, pad_to=15)
+        print(f"{rank}. {c_bot_name}: {stats['points']} pts ({stats['wins']}W - {stats['losses']}L - {stats['ties']}T)")
