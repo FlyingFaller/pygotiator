@@ -43,7 +43,7 @@ class BenBot(RPSTemplate):
     DEBUG = False
     VERBOSE = True
 
-    NROUNDS = 20
+    NROUNDS = 100
 
     CAMERA_INDEX = 0
     CAMERA_WIDTH = 540
@@ -292,7 +292,7 @@ class BenBot(RPSTemplate):
 
             plt.tight_layout()
             plt.show(block=False) 
-            plt.pause(3)
+            plt.pause(5)
             plt.close()
 
         return [Move.ROCK, Move.PAPER, Move.SCISSORS][cloud_idx]
@@ -369,6 +369,6 @@ class BenBot(RPSTemplate):
 
 if __name__ == "__main__":
     bot = BenBot()
-    for _ in range(5):
+    for _ in range(1):
         output = bot.make_move(history=[])
         print(f'Output: {output}')

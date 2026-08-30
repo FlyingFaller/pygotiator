@@ -9,6 +9,9 @@ from bots.BenBot import BenBot
 
 
 class AlexBot(RPSTemplate):
+    def __init__(self):
+        self.ben_bot = BenBot()
+
     def make_move(self, history: list[RoundResult]) -> Move:
         roundNumber = len(history)
 
@@ -88,17 +91,17 @@ class AlexBot(RPSTemplate):
 
                 # Make Ben play against himself for a few rounds
                 case 5:
-                    move = BenBot(history)
+                    move = self.ben_bot.make_move(history)
                 case 6:
-                    move = BenBot(history)
+                    move = self.ben_bot.make_move(history)
                 case 7:
-                    move = BenBot(history)
+                    move = self.ben_bot.make_move(history)
                 case 8:
-                    move = BenBot(history)
+                    move = self.ben_bot.make_move(history)
                 case 9:
-                    move = BenBot(history)
+                    move = self.ben_bot.make_move(history)
                 case 10:
-                    move = BenBot(history)
+                    move = self.ben_bot.make_move(history)
 
                 # Let's turn on the printer
                 case 11:
@@ -217,7 +220,7 @@ class AlexBot(RPSTemplate):
                     }
 
     def ben_counter(self, history: list[RoundResult]) -> Move:
-        benMove = BenBot(history)
+        benMove = self.ben_bot.make_move(history)
         return self.win_conditions.get(benMove)
 
     rock_ascii = '''

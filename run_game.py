@@ -351,10 +351,11 @@ if __name__ == "__main__":
 
     example_bots = ['all_rock_bot.py', 'ascii_bot.py', 'example_bot.py', 'tit4tat_bot.py', 'broken_bot.py']
 
-    EXCLUDE      = ['broken_bot.py', 'all_rock_bot.py']
+    # EXCLUDE      = ['broken_bot.py', 'all_rock_bot.py']
+    EXCLUDE      = example_bots
     NUM_ROUNDS   = 100
     TIMEOUT      = 20.0
-    START_PAUSED = False
+    START_PAUSED = True
 
     loaded_bots  = load_bots(exclude=EXCLUDE)
     history      = run_tournament(loaded_bots, num_rounds=NUM_ROUNDS, timeout_seconds=TIMEOUT, start_paused=START_PAUSED)
