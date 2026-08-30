@@ -220,7 +220,7 @@ if __name__ == "__main__":
 
     example_bots = ['all_rock_bot.py', 'ascii_bot.py', 'example_bot.py', 'tit4tat_bot.py', 'broken_bot.py']
 
-    loaded_bots = load_bots(exclude='broken_bot.py') # Change to exclude=example_bots for real tournament!
+    loaded_bots = load_bots(exclude='example_bots') # Change to exclude=example_bots for real tournament!
     history = run_tournament(loaded_bots, num_rounds=100, timeout_seconds=1.0) # 100 rounds, max thinking time 20 seconds
     final_scores = calculate_scores(history)
     
