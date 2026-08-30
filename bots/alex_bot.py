@@ -1,6 +1,6 @@
 from template import Move, RoundResult, RPSTemplate
 import random
-from bots.ben_bot import BenBot
+from bots.BenBot import BenBot
 
 # import claude
 # import copilot
