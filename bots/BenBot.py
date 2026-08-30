@@ -32,11 +32,11 @@ class BenBot(RPSTemplate):
 
     # (is_active, weight)
     ACTIVE_FEATURES = {
-        FeatureSet.RANDOM  : (True,  1.0),
-        FeatureSet.LAVALAMP: (False, 1.0),
-        FeatureSet.TAROT   : (True,  1.0),
-        FeatureSet.CLOUDS  : (True,  1.0),
-        FeatureSet.STANLEY : (True,  1.0),
+        FeatureSet.RANDOM  : (True,  1.2),
+        FeatureSet.LAVALAMP: (True,  1.0),
+        FeatureSet.TAROT   : (True,  0.3),
+        FeatureSet.CLOUDS  : (True,  2.0),
+        FeatureSet.STANLEY : (True,  0.5),
         FeatureSet.WIKI    : (True,  1.0)
     }
 

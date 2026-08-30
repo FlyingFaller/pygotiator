@@ -352,7 +352,7 @@ if __name__ == "__main__":
     example_bots = ['all_rock_bot.py', 'ascii_bot.py', 'example_bot.py', 'tit4tat_bot.py', 'broken_bot.py']
 
     EXCLUDE      = ['broken_bot.py', 'all_rock_bot.py']
-    NUM_ROUNDS   = 20
+    NUM_ROUNDS   = 100
     TIMEOUT      = 20.0
     START_PAUSED = False
 
