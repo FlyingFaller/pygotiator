@@ -7,6 +7,8 @@ import itertools
 from colorama import init, Fore, Style
 import sys
 import threading
+import msvcrt
+import time
 
 from template import RPSTemplate, Move, RoundResult, Result
 
@@ -137,12 +139,22 @@ def _get_history(target_bot: str, opponent_bot: str, central_history: list[dict[
             ))
     return history
 
-def run_tournament(bots: list[dict[str, Any]], num_rounds: int = 100, timeout_seconds: float = 20.0) -> list[dict[str, Any]]:
+def run_tournament(bots: list[dict[str, Any]], 
+                   num_rounds: int = 100, 
+                   timeout_seconds: float = 20.0,
+                   start_paused = False) -> list[dict[str, Any]]:
     """
     Runs a Round-Robin tournament between all loaded bots.
     """
-    central_history = []
+    central_history = [] #
+
+    # Global styles
     err_style = f"{Fore.RED}{Style.BRIGHT}"
+    sys_style = f"{Fore.YELLOW}{Style.BRIGHT}"
+
+    # Flag for tournament flow control like pausing and stepping
+    is_paused = start_paused
+    print(f"\n{sys_style}[Press 'p'/[space] to Pause, 's' to step, and 'q' to quit]{Style.RESET_ALL}\n")
     
     for bot_a_info, bot_b_info in itertools.combinations(bots, 2):
         
@@ -162,6 +174,32 @@ def run_tournament(bots: list[dict[str, Any]], num_rounds: int = 100, timeout_se
             continue
 
         for _ in range(num_rounds):
+
+            # Keyboard listening loop
+            run_step = False
+            while True:
+                if msvcrt.kbhit(): # Get any pressed keys off buffer
+                    key = msvcrt.getch().lower() # Read the key
+                    
+                    if key in (b'p', b' '): # Pause/resume
+                        is_paused = not is_paused
+                        state_msg = "PAUSED" if is_paused else "RESUMED"
+                        print(f"{sys_style}[{state_msg}]{Style.RESET_ALL}")
+                        
+                    elif key == b's' and is_paused:
+                        run_step = True
+                        break # Break the loop to run one round
+                        
+                    elif key == b'q':
+                        print(f"\n{sys_style}[QUITTING TOURNAMENT]{Style.RESET_ALL}")
+                        return central_history # Abort and return what we have so far
+                
+                # Let them tournament roll (we are not paused or stepping)
+                if not is_paused or run_step:
+                    break
+                    
+                time.sleep(0.05) # Give the CPU some breaks
+
             hist_a = _get_history(bot_a_name, bot_b_name, central_history)
             hist_b = _get_history(bot_b_name, bot_a_name, central_history)
             
@@ -313,8 +351,13 @@ if __name__ == "__main__":
 
     example_bots = ['all_rock_bot.py', 'ascii_bot.py', 'example_bot.py', 'tit4tat_bot.py', 'broken_bot.py']
 
-    loaded_bots = load_bots(exclude=['broken_bot.py', 'all_rock_bot.py', 'example_bot.py', 'tit4tat_bot.py']) # Change to exclude=example_bots for real tournament!
-    history = run_tournament(loaded_bots, num_rounds=20, timeout_seconds=20.0)
+    EXCLUDE      = ['broken_bot.py', 'all_rock_bot.py']
+    NUM_ROUNDS   = 20
+    TIMEOUT      = 20.0
+    START_PAUSED = False
+
+    loaded_bots  = load_bots(exclude=EXCLUDE)
+    history      = run_tournament(loaded_bots, num_rounds=NUM_ROUNDS, timeout_seconds=TIMEOUT, start_paused=START_PAUSED)
     final_scores = calculate_scores(history)
     
     print("\n--- TOURNAMENT RESULTS ---")
